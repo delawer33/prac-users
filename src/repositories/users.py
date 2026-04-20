@@ -13,7 +13,12 @@ async def get_user(session: AsyncSession, user_id: UUID) -> UserModel | None:
 
 
 async def create_user(session: AsyncSession, data: UserCreate) -> UserModel:
-    user = UserModel(username=data.username)
+    user = UserModel(
+        username=data.username,
+        email=data.email,
+        first_name=data.first_name,
+        last_name=data.last_name,
+    )
     session.add(user)
     await session.flush()
     await session.refresh(user)

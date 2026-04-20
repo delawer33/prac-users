@@ -1,7 +1,7 @@
 import logging
 from typing import Annotated, AsyncGenerator
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from src.config import Settings
@@ -34,7 +34,7 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         except TimeoutError:
             await session.rollback()
             logger.error("Database connection timed out")
-            raise HTTPException(status_code=503, detail="Database unavailable")
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable")
         except Exception:
             await session.rollback()
             raise

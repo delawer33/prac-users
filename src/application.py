@@ -1,16 +1,31 @@
 import logging
+
 from fastapi import FastAPI
-from fastapi.responses import UJSONResponse
 from starlette.middleware.cors import CORSMiddleware
 
+from src.exception_handlers import register_exception_handlers
+from src.logging_filters import RequestIdLogFilter
+from src.middleware.request_id import register_request_id_middleware
 from src.routers.healthcheck import router as healthcheck_router
 from src.routers.users import router as users_router
 
+logger = logging.getLogger(__name__)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-)
+
+def _configure_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format=(
+            "%(asctime)s %(levelname)s %(name)s "
+            "[request_id=%(request_id)s] %(message)s"
+        ),
+    )
+    request_id_filter = RequestIdLogFilter()
+    for handler in logging.getLogger().handlers:
+        handler.addFilter(request_id_filter)
+
+
+_configure_logging()
 
 def get_app() -> FastAPI:
     """
@@ -23,7 +38,6 @@ def get_app() -> FastAPI:
     app = FastAPI(
         docs_url='/docs',
         openapi_url='/openapi.json',
-        default_response_class=UJSONResponse,
     )
 
     app.add_middleware(
@@ -33,7 +47,11 @@ def get_app() -> FastAPI:
         allow_methods=['*'],
         allow_headers=['*'],
     )
+    register_request_id_middleware(app=app)
+
+    register_exception_handlers(app)
+
     app.include_router(healthcheck_router)
-    app.include_router(users_router)
+    app.include_router(users_router, prefix="/v1")
 
     return app
