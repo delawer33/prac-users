@@ -1,9 +1,47 @@
 services:
   postgres:
+    container_name: users_postgres
     image: postgres:14
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_DB: postgres
-      POSTGRES_PASSWORD: 123456
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT}:5432"
+    volumes:
+      - users_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - int-services
+
+  users:
+    container_name: users_app
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${USERS_HOST_PORT}:8000"
+    volumes:
+      - ./:/app
+    networks:
+      - int-services
+    command: >
+      sh -c "python -m uvicorn src.application:get_app --host 0.0.0.0 --port 8000 --factory --reload"
+
+networks:
+  int-services:
+    name: int-services
+
+volumes:
+  users_postgres_data:

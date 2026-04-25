@@ -1,8 +1,13 @@
 import logging
 from typing import Annotated, AsyncGenerator
 
-from fastapi import Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from fastapi import Depends
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from src.config import Settings
 
@@ -15,8 +20,11 @@ engine: AsyncEngine = create_async_engine(
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=5,
-    pool_timeout=30,
+    pool_timeout=3,
     pool_recycle=1800,
+    connect_args={
+        "timeout": 5,
+    },
 )
 
 SessionFactory = async_sessionmaker(
@@ -31,10 +39,6 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         try:
             yield session
             await session.commit()
-        except TimeoutError:
-            await session.rollback()
-            logger.error("Database connection timed out")
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable")
         except Exception:
             await session.rollback()
             raise
@@ -43,3 +47,4 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
+
