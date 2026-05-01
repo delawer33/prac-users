@@ -7,7 +7,10 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.exceptions import UserDeletionForbiddenError, UserEmailAlreadyExistsError, UserNotFoundError
+from src.exceptions import (
+    AlreadyExistsError,
+    UserNotFoundError,
+)
 from src.request_context import request_id_var
 
 logger = logging.getLogger(__name__)
@@ -55,31 +58,17 @@ def register_exception_handlers(app: FastAPI) -> None:
             ),
         )
 
-    @app.exception_handler(UserEmailAlreadyExistsError)
-    async def user_email_already_exists_handler(
+    @app.exception_handler(AlreadyExistsError)
+    async def already_exists_handler(
         request: Request,
-        exc: UserEmailAlreadyExistsError,
+        exc: AlreadyExistsError,
     ) -> JSONResponse:
-        logger.warning("email already registered email=%s", exc.email)
+        logger.warning("already exists field=%s", exc.field)
         return JSONResponse(
             status_code=status.HTTP_409_CONFLICT,
             content=_error_content(
                 request,
-                "Email already registered",
-            ),
-        )
-
-    @app.exception_handler(UserDeletionForbiddenError)
-    async def user_deletion_forbidden_handler(
-        request: Request,
-        exc: UserDeletionForbiddenError,
-    ) -> JSONResponse:
-        logger.warning("user deletion forbidden user_id=%s", exc.user_id)
-        return JSONResponse(
-            status_code=status.HTTP_409_CONFLICT,
-            content=_error_content(
-                request,
-                "Active user cannot be deleted",
+                f"{exc.field.capitalize()} already exists",
             ),
         )
 

@@ -24,6 +24,6 @@ async def resolve_user(data: UserResolveRequest, session: SessionDep) -> UserRes
     return await users_service.resolve_user(session, data)
 
 
-@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_user(user_id: UUID, session: SessionDep) -> None:
-    await users_service.delete_user(session, user_id)
+@router.post("/{user_id}/saga-cancellation", status_code=status.HTTP_204_NO_CONTENT)
+async def cancel_user_for_order_saga(user_id: UUID, session: SessionDep) -> None:
+    await users_service.cancel_user_for_order_saga(session, user_id)
