@@ -4,6 +4,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.exceptions import (
+    AlreadyExistsError,
     UserNotFoundError,
 )
 from src.repositories import users as users_repo
@@ -20,13 +21,16 @@ async def get_user(session: AsyncSession, user_id: UUID) -> UserRead:
 
 
 async def create_user(session: AsyncSession, data: UserCreate) -> UserRead:
-    user = await users_repo.create_user(
-        session,
-        username=data.username,
-        email=str(data.email),
-        first_name=data.first_name,
-        last_name=data.last_name,
-    )
+    try:
+        user = await users_repo.create_user(
+            session,
+            username=data.username,
+            email=str(data.email),
+            first_name=data.first_name,
+            last_name=data.last_name,
+        )
+    except AlreadyExistsError:
+        raise
     logger.info("user created user_id=%s", user.id)
     return UserRead.model_validate(user)
 

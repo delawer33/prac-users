@@ -7,10 +7,7 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.exceptions import (
-    AlreadyExistsError,
-    UserNotFoundError,
-)
+from src.exceptions import AppError
 from src.request_context import request_id_var
 
 logger = logging.getLogger(__name__)
@@ -25,6 +22,24 @@ def _error_content(
 
 
 def register_exception_handlers(app: FastAPI) -> None:
+    @app.exception_handler(AppError)
+    async def app_error_handler(
+        request: Request,
+        exc: AppError,
+    ) -> JSONResponse:
+        detail = exc.log_detail or str(exc) or None
+        getattr(logger, exc.log_level)(
+            "%s method=%s path=%s%s",
+            type(exc).__name__,
+            request.method,
+            request.url.path,
+            f" detail={detail!r}" if detail else "",
+        )
+        return JSONResponse(
+            status_code=exc.http_status_code,
+            content=_error_content(request, exc.public_message),
+        )
+
     @app.exception_handler(SQLAlchemyError)
     async def sqlalchemy_error_handler(
         request: Request,
@@ -41,34 +56,6 @@ def register_exception_handlers(app: FastAPI) -> None:
             content=_error_content(
                 request,
                 "Database error",
-            ),
-        )
-
-    @app.exception_handler(UserNotFoundError)
-    async def user_not_found_handler(
-        request: Request,
-        exc: UserNotFoundError,
-    ) -> JSONResponse:
-        logger.warning("user not found user_id=%s", exc.user_id)
-        return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content=_error_content(
-                request,
-                "User not found",
-            ),
-        )
-
-    @app.exception_handler(AlreadyExistsError)
-    async def already_exists_handler(
-        request: Request,
-        exc: AlreadyExistsError,
-    ) -> JSONResponse:
-        logger.warning("already exists field=%s", exc.field)
-        return JSONResponse(
-            status_code=status.HTTP_409_CONFLICT,
-            content=_error_content(
-                request,
-                f"{exc.field.capitalize()} already exists",
             ),
         )
 
@@ -97,3 +84,4 @@ def register_exception_handlers(app: FastAPI) -> None:
                 exc.errors(),
             ),
         )
+

@@ -1,10 +1,11 @@
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.exceptions import AlreadyExistsError
+from src.exceptions import AlreadyExistsError, InvariantViolationError
 from src.models.user_resolve_requests import UserResolveRequestModel
 from src.models.users import UserModel
 
@@ -102,21 +103,21 @@ async def create_resolve_request(
     user_id: UUID,
     created_by_request: bool,
 ) -> UserResolveRequestModel:
-    request = UserResolveRequestModel(
-        external_request_id=external_request_id,
-        user_id=user_id,
-        created_by_request=created_by_request,
+    stmt = (
+        pg_insert(UserResolveRequestModel)
+        .values(
+            external_request_id=external_request_id,
+            user_id=user_id,
+            created_by_request=created_by_request,
+        )
+        .on_conflict_do_nothing(index_elements=["external_request_id"])
     )
-    session.add(request)
-    try:
-        await session.flush()
-    except IntegrityError:
-        existing = await get_resolve_request(session, external_request_id)
-        if existing:
-            return existing
-        raise
-    await session.refresh(request)
-    return request
+    await session.execute(stmt)
+
+    resolve_request = await get_resolve_request(session, external_request_id)
+    if resolve_request is None:
+        raise InvariantViolationError("Resolve request upsert failed")
+    return resolve_request
 
 
 async def resolve_user_for_request(
@@ -130,7 +131,7 @@ async def resolve_user_for_request(
     if existing_request:
         existing_user = await get_user(session, existing_request.user_id)
         if existing_user is None:
-            raise RuntimeError("Resolve request points to missing user")
+            raise InvariantViolationError("Resolve request points to missing user")
         return existing_user, existing_request.created_by_request
 
     # если пользователь уже существует по email, только привязываем request-id
@@ -144,7 +145,7 @@ async def resolve_user_for_request(
         )
         resolved_user = await get_user(session, resolve_request.user_id)
         if resolved_user is None:
-            raise RuntimeError("Resolve request points to missing user")
+            raise InvariantViolationError("Resolve request points to missing user")
         return resolved_user, resolve_request.created_by_request
 
     # создаем/получаем пользователя и приводим его к active-состоянию
@@ -163,7 +164,7 @@ async def resolve_user_for_request(
         )
         resolved_user = await get_user(session, resolve_request.user_id)
         if resolved_user is None:
-            raise RuntimeError("Resolve request points to missing user")
+            raise InvariantViolationError("Resolve request points to missing user")
         await activate_user(session, resolved_user)
         return resolved_user, resolve_request.created_by_request
 

@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
-from src.exception_handlers import register_exception_handlers
+from src.exceptions.exception_handlers import register_exception_handlers
 from src.logging_filters import RequestIdLogFilter
 from src.middleware.request_id import register_request_id_middleware
 from src.routers.healthcheck import router as healthcheck_router
