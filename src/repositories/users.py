@@ -5,7 +5,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.exceptions import AlreadyExistsError, InvariantViolationError
+from src.exceptions import InvariantViolationError
 from src.models.user_resolve_requests import UserResolveRequestModel
 from src.models.users import UserModel
 
@@ -30,10 +30,7 @@ async def create_user(
         last_name=last_name,
     )
     session.add(user)
-    try:
-        await session.flush()
-    except IntegrityError:
-        raise AlreadyExistsError("email", email)
+    await session.flush()
     await session.refresh(user)
     return user
 
@@ -52,10 +49,7 @@ async def create_resolved_user(session: AsyncSession, email: str) -> UserModel:
         is_active=True,
     )
     session.add(user)
-    try:
-        await session.flush()
-    except IntegrityError:
-        raise AlreadyExistsError("email", email)
+    await session.flush()
     await session.refresh(user)
     return user
 
@@ -151,7 +145,7 @@ async def resolve_user_for_request(
     # создаем/получаем пользователя и приводим его к active-состоянию
     try:
         user = await create_resolved_user(session, email)
-    except AlreadyExistsError:
+    except IntegrityError:
         # Гонка: пользователь появился между чтением и созданием
         raced_user = await get_user_by_email(session, email)
         if not raced_user:
