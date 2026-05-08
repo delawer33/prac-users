@@ -2,7 +2,6 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.exceptions import InvariantViolationError
@@ -112,61 +111,3 @@ async def create_resolve_request(
     if resolve_request is None:
         raise InvariantViolationError("Resolve request upsert failed")
     return resolve_request
-
-
-async def resolve_user_for_request(
-    session: AsyncSession,
-    *,
-    external_request_id: str,
-    email: str,
-) -> tuple[UserModel, bool]:
-    # replay по external_request_id для ретраев
-    existing_request = await get_resolve_request(session, external_request_id)
-    if existing_request:
-        existing_user = await get_user(session, existing_request.user_id)
-        if existing_user is None:
-            raise InvariantViolationError("Resolve request points to missing user")
-        return existing_user, existing_request.created_by_request
-
-    # если пользователь уже существует по email, только привязываем request-id
-    existing_user = await get_user_by_email(session, email)
-    if existing_user:
-        resolve_request = await create_resolve_request(
-            session=session,
-            external_request_id=external_request_id,
-            user_id=existing_user.id,
-            created_by_request=False,
-        )
-        resolved_user = await get_user(session, resolve_request.user_id)
-        if resolved_user is None:
-            raise InvariantViolationError("Resolve request points to missing user")
-        return resolved_user, resolve_request.created_by_request
-
-    # создаем/получаем пользователя и приводим его к active-состоянию
-    try:
-        user = await create_resolved_user(session, email)
-    except IntegrityError:
-        # Гонка: пользователь появился между чтением и созданием
-        raced_user = await get_user_by_email(session, email)
-        if not raced_user:
-            raise
-        resolve_request = await create_resolve_request(
-            session=session,
-            external_request_id=external_request_id,
-            user_id=raced_user.id,
-            created_by_request=False,
-        )
-        resolved_user = await get_user(session, resolve_request.user_id)
-        if resolved_user is None:
-            raise InvariantViolationError("Resolve request points to missing user")
-        await activate_user(session, resolved_user)
-        return resolved_user, resolve_request.created_by_request
-
-    # Фиксируем связку request-id -> user
-    resolve_request = await create_resolve_request(
-        session=session,
-        external_request_id=external_request_id,
-        user_id=user.id,
-        created_by_request=True,
-    )
-    return user, resolve_request.created_by_request
