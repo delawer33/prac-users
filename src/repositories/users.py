@@ -1,4 +1,4 @@
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -17,41 +17,50 @@ class UsersRepository:
         result = await self.db.execute(select(UserModel).where(UserModel.id == user_id))
         return result.scalar_one_or_none()
 
-    async def create_user(
+    async def upsert_user(
         self,
         *,
         username: str,
         email: str,
         first_name: str,
         last_name: str,
-    ) -> UserModel:
-        user = UserModel(
-            username=username,
-            email=email,
-            first_name=first_name,
-            last_name=last_name,
+    ) -> UUID | None:
+        stmt = (
+            pg_insert(UserModel)
+            .values(
+                id=uuid4(),
+                username=username,
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+                is_active=True,
+            )
+            .on_conflict_do_nothing(index_elements=["email"])
+            .returning(UserModel.id)
         )
-        self.db.add(user)
-        await self.db.flush()
-        await self.db.refresh(user)
-        return user
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def get_user_by_email(self, email: str) -> UserModel | None:
         result = await self.db.execute(select(UserModel).where(UserModel.email == email))
         return result.scalar_one_or_none()
 
-    async def create_resolved_user(self, email: str) -> UserModel:
-        user = UserModel(
-            username=None,
-            email=email,
-            first_name=None,
-            last_name=None,
-            is_active=True,
+    async def upsert_resolved_user(self, email: str) -> UUID | None:
+        stmt = (
+            pg_insert(UserModel)
+            .values(
+                id=uuid4(),
+                username=None,
+                email=email,
+                first_name=None,
+                last_name=None,
+                is_active=True,
+            )
+            .on_conflict_do_nothing(index_elements=["email"])
+            .returning(UserModel.id)
         )
-        self.db.add(user)
-        await self.db.flush()
-        await self.db.refresh(user)
-        return user
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def activate_user(self, user: UserModel) -> UserModel:
         user.is_active = True

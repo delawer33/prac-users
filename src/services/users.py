@@ -1,9 +1,7 @@
 import logging
 from uuid import UUID
 
-from sqlalchemy.exc import IntegrityError
-
-from src.exceptions import AlreadyExistsError, NotFoundError
+from src.exceptions import AlreadyExistsError, InvariantViolationError, NotFoundError
 from src.repositories.users import UsersRepository
 from src.schemas.users import UserCreate, UserRead, UserResolveRequest, UserResolveResponse
 from src.services.user_resolution import UserResolutionService
@@ -23,15 +21,17 @@ class UsersService:
         return UserRead.model_validate(user)
 
     async def create_user(self, data: UserCreate) -> UserRead:
-        try:
-            user = await self.repo.create_user(
-                username=data.username,
-                email=str(data.email),
-                first_name=data.first_name,
-                last_name=data.last_name,
-            )
-        except IntegrityError:
+        inserted_id = await self.repo.upsert_user(
+            username=data.username,
+            email=str(data.email),
+            first_name=data.first_name,
+            last_name=data.last_name,
+        )
+        if inserted_id is None:
             raise AlreadyExistsError("email", str(data.email))
+        user = await self.repo.get_user(inserted_id)
+        if user is None:
+            raise InvariantViolationError("User insert returned unknown id")
         logger.info("user created user_id=%s", user.id)
         return UserRead.model_validate(user)
 

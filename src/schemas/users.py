@@ -1,7 +1,13 @@
+from __future__ import annotations
+
 from datetime import datetime
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+if TYPE_CHECKING:
+    from src.models.users import UserModel
 
 
 class UserCreate(BaseModel):
@@ -31,3 +37,10 @@ class UserRead(BaseModel):
 class UserResolveResponse(BaseModel):
     user: UserRead
     created: bool
+
+    @classmethod
+    def from_resolution(cls, user: UserModel, *, created_by_request: bool) -> UserResolveResponse:
+        return cls(
+            user=UserRead.model_validate(user),
+            created=created_by_request,
+        )

@@ -1,11 +1,9 @@
 from uuid import UUID
 
-from sqlalchemy.exc import IntegrityError
-
 from src.exceptions import InvariantViolationError
 from src.models.users import UserModel
 from src.repositories.users import UsersRepository
-from src.schemas.users import UserRead, UserResolveRequest, UserResolveResponse
+from src.schemas.users import UserResolveRequest, UserResolveResponse
 
 
 class UserResolutionService:
@@ -25,9 +23,9 @@ class UserResolutionService:
                 email,
             )
 
-        return UserResolveResponse(
-            user=UserRead.model_validate(user),
-            created=created_by_request,
+        return UserResolveResponse.from_resolution(
+            user,
+            created_by_request=created_by_request,
         )
 
     async def _replay_resolve_request(
@@ -54,26 +52,29 @@ class UserResolutionService:
             return await self._link_resolve_request(external_request_id, existing_user.id)
 
         # создаем/получаем пользователя и приводим его к active-состоянию
-        try:
-            new_user = await self.repo.create_resolved_user(email)
-        except IntegrityError:
-            # Гонка: пользователь появился между чтением и созданием
-            raced_user = await self.repo.get_user_by_email(email)
-            if not raced_user:
-                raise
-            return await self._link_resolve_request(
-                external_request_id,
-                raced_user.id,
-                activate=True,
+        # может произойти гонка, другой запрос создал пользователя после
+        # предыдущей проверки
+        inserted_id = await self.repo.upsert_resolved_user(email)
+        if inserted_id is not None:
+            new_user = await self.repo.get_user(inserted_id)
+            if new_user is None:
+                raise InvariantViolationError("Resolved user insert returned unknown id")
+            resolve_request = await self.repo.create_resolve_request(
+                external_request_id=external_request_id,
+                user_id=new_user.id,
+                created_by_request=True,
             )
+            return new_user, resolve_request.created_by_request
 
-        # Фиксируем связку request-id -> user
-        resolve_request = await self.repo.create_resolve_request(
-            external_request_id=external_request_id,
-            user_id=new_user.id,
-            created_by_request=True,
+        # inserted_id не вернулся, значит произошла гонка
+        raced_user = await self.repo.get_user_by_email(email)
+        if raced_user is None:
+            raise InvariantViolationError("User email conflict without existing row")
+        return await self._link_resolve_request(
+            external_request_id,
+            raced_user.id,
+            activate=True,
         )
-        return new_user, resolve_request.created_by_request
 
     async def _link_resolve_request(
         self,
