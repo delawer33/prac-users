@@ -16,3 +16,6 @@ class UserModel(Base):
     last_name: Mapped[str | None] = mapped_column(sa.String(100), nullable=True)
     is_active: Mapped[bool] = mapped_column(sa.Boolean(), default=True, server_default=sa.true())
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.func.now())
+    orders_count: Mapped[int] = mapped_column(sa.Integer(), nullable=False, default=0, server_default=sa.text("0"))
+    last_ordered_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    total_spent: Mapped[float] = mapped_column(sa.Numeric(14, 2), nullable=False, default=0, server_default=sa.text("0"))

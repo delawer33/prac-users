@@ -1,5 +1,8 @@
+from datetime import datetime
+from decimal import Decimal
 from uuid import UUID, uuid4
 
+import sqlalchemy as sa
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -93,6 +96,33 @@ class UsersRepository:
             )
         )
         return result.scalar_one_or_none()
+
+    async def update_user_stats(
+        self,
+        user_id: UUID,
+        *,
+        amount: float,
+        ordered_at: datetime,
+    ) -> None:
+        await self.db.execute(
+            sa.update(UserModel)
+            .where(UserModel.id == user_id)
+            .values(
+                orders_count=UserModel.orders_count + 1,
+                total_spent=UserModel.total_spent + Decimal(str(amount)),
+                last_ordered_at=sa.case(
+                    (
+                        sa.or_(
+                            UserModel.last_ordered_at.is_(None),
+                            UserModel.last_ordered_at < ordered_at,
+                        ),
+                        ordered_at,
+                    ),
+                    else_=UserModel.last_ordered_at,
+                ),
+            )
+        )
+        await self.db.flush()
 
     async def create_resolve_request(
         self,

@@ -8,6 +8,12 @@ class Settings(BaseSettings):
     # Database connection
     postgres_url: PostgresDsn = Field(env='postgres_url')
 
+    # Kafka consumer
+    kafka_bootstrap_servers: str = Field(default='localhost:9092', env='kafka_bootstrap_servers')
+    kafka_order_created_topic: str = Field(default='orders.order-created', env='kafka_order_created_topic')
+    kafka_order_created_dlq_topic: str = Field(default='orders.order-created.dlq', env='kafka_order_created_dlq_topic')
+    kafka_consumer_group_id: str = Field(default='users-order-created', env='kafka_consumer_group_id')
+
     # Local app runtime
     app_host: str = Field(default='localhost', env='app_host')
     app_port: int = Field(default=8000, env='app_port')

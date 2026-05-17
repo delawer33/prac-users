@@ -17,9 +17,14 @@ dependencies = [
     "asyncpg (>=0.31.0,<0.32.0)",
     "email-validator (>=2.0.0)",
     "pytest (>=8.4.2,<9.0.0)",
-    "pytest-asyncio (>=1.2.0,<2.0.0)"
+    "pytest-asyncio (>=1.2.0,<2.0.0)",
+    "aiokafka (>=0.12.0)",
+    "tenacity (>=9.0.0,<10.0.0)",
 ]
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
