@@ -17,7 +17,6 @@ class OrderCreatedEventHandler:
     def __init__(self, session: AsyncSession) -> None:
         self._users_repo = UsersRepository(session)
         self._processed_repo = ProcessedMessagesRepository(session)
-        self._session = session
 
     async def handle(self, payload: dict) -> None:
         try:
@@ -32,7 +31,10 @@ class OrderCreatedEventHandler:
             # Сообщение невалидно, сразу выкидываем PermanentEventError и далее оно идет DLQ
             raise PermanentEventError(f"malformed OrderCreated payload: {exc}") from exc
 
-        if await self._processed_repo.is_processed(event_id):
+        if not await self._processed_repo.try_mark_processed(
+            event_id=event_id,
+            topic=TOPIC_ORDER_CREATED,
+        ):
             logger.info("OrderCreated already processed event_id=%s", event_id)
             return
 
@@ -41,9 +43,4 @@ class OrderCreatedEventHandler:
             amount=total_amount,
             ordered_at=occurred_at,
         )
-        await self._processed_repo.mark_processed(
-            event_id=event_id,
-            topic=TOPIC_ORDER_CREATED,
-        )
-        await self._session.commit()
         logger.info("OrderCreated processed event_id=%s user_id=%s", event_id, user_id)

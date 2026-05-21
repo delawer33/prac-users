@@ -21,7 +21,8 @@ async def _send_to_dlq(producer: AIOKafkaProducer, raw_value: bytes) -> None:
         await producer.flush()
         logger.warning("message sent to DLQ")
     except KafkaError:
-        logger.exception("failed to send message to DLQ")
+        logger.exception("failed to send message to DLQ, will retry")
+        raise
 
 
 async def run_consumer() -> None:
@@ -60,6 +61,7 @@ async def run_consumer() -> None:
                 async with SessionFactory() as session:
                     handler = OrderCreatedEventHandler(session)
                     await handler.handle(payload)
+                    await session.commit()
                 await consumer.commit()
             except PermanentEventError as exc:
                 logger.error("permanent event error offset=%s reason=%s", msg.offset, exc.reason)
