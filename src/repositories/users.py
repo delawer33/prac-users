@@ -103,8 +103,8 @@ class UsersRepository:
         *,
         amount: float,
         ordered_at: datetime,
-    ) -> None:
-        await self.db.execute(
+    ) -> bool:
+        result = await self.db.execute(
             sa.update(UserModel)
             .where(UserModel.id == user_id)
             .values(
@@ -123,6 +123,7 @@ class UsersRepository:
             )
         )
         await self.db.flush()
+        return result.rowcount > 0
 
     async def create_resolve_request(
         self,

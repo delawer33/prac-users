@@ -28,7 +28,7 @@ class OrderCreatedEventHandler:
             if occurred_at.tzinfo is None:
                 occurred_at = occurred_at.replace(tzinfo=timezone.utc)
         except (KeyError, ValueError, TypeError) as exc:
-            # Сообщение невалидно, сразу выкидываем PermanentEventError и далее оно идет DLQ
+            # Сообщение невалидно, сразу выкидываем PermanentEventError и далее оно идет в DLQ
             raise PermanentEventError(f"malformed OrderCreated payload: {exc}") from exc
 
         if not await self._processed_repo.try_mark_processed(
@@ -38,9 +38,11 @@ class OrderCreatedEventHandler:
             logger.info("OrderCreated already processed event_id=%s", event_id)
             return
 
-        await self._users_repo.update_user_stats(
+        if not await self._users_repo.update_user_stats(
             user_id,
             amount=total_amount,
             ordered_at=occurred_at,
-        )
+        ):
+            raise PermanentEventError(f"user not found: {user_id}")
+
         logger.info("OrderCreated processed event_id=%s user_id=%s", event_id, user_id)

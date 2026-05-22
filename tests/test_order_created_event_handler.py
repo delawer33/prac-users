@@ -53,6 +53,12 @@ async def test_handle_duplicate_event_does_not_update_stats(db_session):
 
 # Правильная обработка плохих данных
 
+async def test_handle_missing_user_raises_permanent_event_error(db_session):
+    handler = OrderCreatedEventHandler(db_session)
+    with pytest.raises(PermanentEventError, match="user not found"):
+        await handler.handle(_VALID_PAYLOAD)
+
+
 async def test_handle_bad_payload_raises_permanent_event_error(db_session):
     await create_user(db_session, user_id=USER_ID)
 
