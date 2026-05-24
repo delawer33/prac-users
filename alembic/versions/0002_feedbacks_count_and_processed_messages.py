@@ -1,8 +1,8 @@
-"""add user stats columns and processed_messages table
+"""add feedbacks_count and processed_messages table
 
-Revision ID: 0002_user_stats_processed
+Revision ID: 0002_feedbacks_count_processed
 Revises: 0001_users_squashed
-Create Date: 2026-05-17 00:00:00.000000
+Create Date: 2026-05-25 00:00:00.000000
 
 """
 from typing import Sequence, Union
@@ -10,16 +10,17 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0002_user_stats_processed"
+revision: str = "0002_feedbacks_count_processed"
 down_revision: Union[str, Sequence[str], None] = "0001_users_squashed"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column("users", sa.Column("orders_count", sa.Integer(), nullable=False, server_default=sa.text("0")))
-    op.add_column("users", sa.Column("last_ordered_at", sa.DateTime(timezone=True), nullable=True))
-    op.add_column("users", sa.Column("total_spent", sa.Numeric(14, 2), nullable=False, server_default=sa.text("0")))
+    op.add_column(
+        "users",
+        sa.Column("feedbacks_count", sa.Integer(), nullable=False, server_default=sa.text("0")),
+    )
 
     op.create_table(
         "processed_messages",
@@ -36,6 +37,4 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("ix_processed_messages_event_id", table_name="processed_messages")
     op.drop_table("processed_messages")
-    op.drop_column("users", "total_spent")
-    op.drop_column("users", "last_ordered_at")
-    op.drop_column("users", "orders_count")
+    op.drop_column("users", "feedbacks_count")

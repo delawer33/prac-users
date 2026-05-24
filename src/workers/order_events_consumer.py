@@ -1,31 +1,32 @@
 import asyncio
 import json
 import logging
+from uuid import UUID
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from aiokafka.errors import KafkaError
 from aiokafka.structs import ConsumerRecord, TopicPartition
-from sqlalchemy.exc import (
-    InterfaceError,
-    OperationalError,
-    SQLAlchemyError,
-    TimeoutError as SQLTimeoutError,
-)
+from sqlalchemy.exc import SQLAlchemyError
 
 from src.config import Settings
 from src.db import SessionFactory
-from src.exceptions import PermanentEventError
-from src.workers.event_handlers import OrderCreatedEventHandler
+from src.exceptions import PermanentEventError, TransientRetriesExhausted
+from src.repositories.processed_messages import ProcessedMessagesRepository
+from src.workers.db_error_classifier import error_reason, is_transient, pgcode
+from src.workers.event_handlers import OrderFeedbackCreatedEventHandler
 
 logger = logging.getLogger(__name__)
 settings = Settings()
 
 
 class RetryPolicy:
-    def __init__(self, *, initial_seconds: float = 1.0, cap_seconds: float = 30.0) -> None:
+    def __init__(
+        self, *, initial_seconds: float, cap_seconds: float, max_attempts: int
+    ) -> None:
         self._initial_seconds = initial_seconds
         self._cap_seconds = cap_seconds
         self._seconds = initial_seconds
+        self.max_attempts = max_attempts
 
     async def wait_before_retry(self) -> None:
         await asyncio.sleep(self._seconds)
@@ -33,6 +34,10 @@ class RetryPolicy:
 
     def reset(self) -> None:
         self._seconds = self._initial_seconds
+
+    @property
+    def next_backoff_seconds(self) -> float:
+        return self._seconds
 
 
 class KafkaIO:
@@ -59,8 +64,7 @@ class KafkaIO:
         await self._consumer.commit({tp: msg.offset + 1})
 
     async def publish_to_dlq(self, raw_value: bytes) -> None:
-        await self._dlq_producer.send(self.dlq_topic, value=raw_value)
-        await self._dlq_producer.flush()
+        await self._dlq_producer.send_and_wait(self.dlq_topic, value=raw_value)
 
 
 class OrderEventsConsumer:
@@ -69,13 +73,34 @@ class OrderEventsConsumer:
         self._retry = retry
 
     async def process_message(self, msg: ConsumerRecord) -> None:
-        while True:
-            if await self._attempt(msg):
+        # Пробуем обработать сообщение self._max_attempts раз
+        # Если все попытки исчерпаны, значит бд или кафка лежит, выходим из воркера
+        for attempt in range(1, self._retry.max_attempts + 1):
+            if await self._attempt(msg, attempt=attempt):
                 self._retry.reset()
                 return
+            if attempt == self._retry.max_attempts:
+                ref = self._kafka.message_ref(msg)
+                logger.critical(
+                    "transient retries exhausted %s attempts=%s — not committing, stopping consumer",
+                    ref,
+                    self._retry.max_attempts,
+                )
+                raise TransientRetriesExhausted(
+                    message_ref=ref,
+                    attempts=self._retry.max_attempts,
+                    detail="db or dlq publish still failing",
+                )
+            logger.warning(
+                "retry scheduled %s attempt=%s/%s next_backoff_seconds=%s",
+                self._kafka.message_ref(msg),
+                attempt,
+                self._retry.max_attempts,
+                self._retry.next_backoff_seconds,
+            )
             await self._retry.wait_before_retry()
 
-    async def _attempt(self, msg: ConsumerRecord) -> bool:
+    async def _attempt(self, msg: ConsumerRecord, *, attempt: int) -> bool:
         """Сделать попытку обработки, возвращает False если нужно заретраить, True если нет"""
         try:
             payload = json.loads(msg.value)
@@ -85,57 +110,90 @@ class OrderEventsConsumer:
                 self._kafka.message_ref(msg),
                 exc,
             )
-            return await self._discard(msg, reason="invalid_json")
+            return await self._discard(msg, reason="invalid_json", attempt=attempt)
 
         try:
-            async with SessionFactory() as session:
-                await OrderCreatedEventHandler(session).handle(payload)
-                await session.commit()
-        except PermanentEventError as exc:
+            event_id = UUID(payload["event_id"])
+        except (KeyError, ValueError, TypeError) as exc:
             logger.error(
-                "permanent event error %s reason=%s",
-                self._kafka.message_ref(msg, event_id=_event_id(payload)),
-                exc.reason,
+                "missing or invalid event_id %s: %s",
+                self._kafka.message_ref(msg),
+                exc,
             )
             return await self._discard(
-                msg,
-                reason=exc.reason,
-                event_id=_event_id(payload),
+                msg, reason=f"missing_event_id: {exc}", attempt=attempt
+            )
+
+        ref = self._kafka.message_ref(msg, event_id=str(event_id))
+        try:
+            async with SessionFactory() as session:
+                is_new = await ProcessedMessagesRepository(session).try_mark_processed(
+                    event_id=event_id, topic=msg.topic
+                )
+                if is_new:
+                    await OrderFeedbackCreatedEventHandler(session).handle(payload)
+                await session.commit()
+        except PermanentEventError as exc:
+            logger.error("permanent event error %s reason=%s", ref, exc.reason)
+            return await self._discard(
+                msg, reason=exc.reason, event_id=str(event_id), attempt=attempt
             )
         except SQLAlchemyError as exc:
-            ref = self._kafka.message_ref(msg, event_id=_event_id(payload))
-            if _is_transient_db_error(exc):
+            if is_transient(exc):
                 logger.exception(
-                    "transient db error %s — not committing, will retry",
+                    "transient db error %s attempt=%s/%s pgcode=%s — not committing",
                     ref,
+                    attempt,
+                    self._retry.max_attempts,
+                    pgcode(exc) or "-",
                 )
                 return False
             logger.error("permanent db error %s reason=%s", ref, exc)
             return await self._discard(
-                msg,
-                reason=_db_error_reason(exc),
-                event_id=_event_id(payload),
+                msg, reason=error_reason(exc), event_id=str(event_id), attempt=attempt
             )
-        except Exception as exc:
+        except Exception:
+            # Вероятно ошибка в коде, выходим из воркера
             logger.exception(
-                "unexpected error %s type=%s — sending to DLQ",
-                self._kafka.message_ref(msg, event_id=_event_id(payload)),
-                type(exc).__name__,
+                "unexpected error %s — not committing, failing consumer", ref
             )
-            return await self._discard(
-                msg,
-                reason=f"unexpected_{type(exc).__name__}: {exc}",
-                event_id=_event_id(payload),
-            )
+            raise
 
-        await self._kafka.commit_message(msg)
-        return True
+        if not is_new:
+            logger.info(
+                "duplicate event_id=%s topic=%s — skipping", event_id, msg.topic
+            )
+        return await self._commit_offset(
+            msg, attempt=attempt, ref=ref, context="after_success"
+        )
+
+    async def _commit_offset(
+        self,
+        msg: ConsumerRecord,
+        *,
+        attempt: int,
+        ref: str,
+        context: str,
+    ) -> bool:
+        try:
+            await self._kafka.commit_message(msg)
+            return True
+        except KafkaError:
+            logger.exception(
+                "offset commit failed %s attempt=%s/%s context=%s",
+                ref,
+                attempt,
+                self._retry.max_attempts,
+                context,
+            )
+            return False
 
     async def _discard(
         self,
         msg: ConsumerRecord,
         *,
         reason: str,
+        attempt: int,
         event_id: str | None = None,
     ) -> bool:
         """Отправить в DLQ и закоммитить. Возвращает False если нужно заретраить, True если нет"""
@@ -149,24 +207,21 @@ class OrderEventsConsumer:
                 self._kafka.dlq_topic,
             )
         except KafkaError:
-            logger.exception("DLQ failed %s reason=%s", ref, reason)
+            logger.exception(
+                "DLQ publish failed %s attempt=%s/%s reason=%s — not committing",
+                ref,
+                attempt,
+                self._retry.max_attempts,
+                reason,
+            )
             return False
 
-        await self._kafka.commit_message(msg)
-        return True
-
-
-def _event_id(payload: dict) -> str | None:
-    value = payload.get("event_id")
-    return str(value) if value is not None else None
-
-
-def _is_transient_db_error(exc: SQLAlchemyError) -> bool:
-    return isinstance(exc, (OperationalError, InterfaceError, SQLTimeoutError))
-
-
-def _db_error_reason(exc: SQLAlchemyError) -> str:
-    return f"db_{type(exc).__name__}: {exc}"
+        return await self._commit_offset(
+            msg,
+            attempt=attempt,
+            ref=ref,
+            context="after_dlq",
+        )
 
 
 async def run_consumer() -> None:
@@ -176,7 +231,7 @@ async def run_consumer() -> None:
     )
 
     kafka_consumer = AIOKafkaConsumer(
-        settings.kafka_order_created_topic,
+        settings.kafka_order_feedback_created_topic,
         bootstrap_servers=settings.kafka_bootstrap_servers,
         group_id=settings.kafka_consumer_group_id,
         enable_auto_commit=False,
@@ -189,14 +244,21 @@ async def run_consumer() -> None:
 
     await kafka_consumer.start()
     await dlq_producer.start()
-    logger.info("order events consumer started")
+    logger.info("order feedback events consumer started")
 
     kafka_io = KafkaIO(
         kafka_consumer,
         dlq_producer,
-        dlq_topic=settings.kafka_order_created_dlq_topic,
+        dlq_topic=settings.kafka_order_feedback_created_dlq_topic,
     )
-    app = OrderEventsConsumer(kafka_io, RetryPolicy())
+    app = OrderEventsConsumer(
+        kafka_io,
+        RetryPolicy(
+            initial_seconds=settings.consumer_retry_initial_seconds,
+            cap_seconds=settings.consumer_retry_cap_seconds,
+            max_attempts=settings.consumer_retry_max_attempts,
+        ),
+    )
 
     try:
         async for msg in kafka_consumer:
@@ -204,7 +266,7 @@ async def run_consumer() -> None:
     finally:
         await kafka_consumer.stop()
         await dlq_producer.stop()
-        logger.info("order events consumer stopped")
+        logger.info("order feedback events consumer stopped")
 
 
 if __name__ == "__main__":

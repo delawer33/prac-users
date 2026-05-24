@@ -32,9 +32,7 @@ class UserRead(BaseModel):
     last_name: str | None
     is_active: bool
     created_at: datetime
-    orders_count: int
-    last_ordered_at: datetime | None
-    total_spent: float
+    feedbacks_count: int
 
 
 class UserResolveResponse(BaseModel):
