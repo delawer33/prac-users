@@ -32,6 +32,7 @@ class UserRead(BaseModel):
     last_name: str | None
     is_active: bool
     created_at: datetime
+    feedbacks_count: int
 
 
 class UserResolveResponse(BaseModel):

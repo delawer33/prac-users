@@ -1,5 +1,6 @@
 from uuid import UUID, uuid4
 
+import sqlalchemy as sa
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -93,6 +94,15 @@ class UsersRepository:
             )
         )
         return result.scalar_one_or_none()
+
+    async def increment_feedbacks_count(self, user_id: UUID) -> bool:
+        result = await self.db.execute(
+            sa.update(UserModel)
+            .where(UserModel.id == user_id)
+            .values(feedbacks_count=UserModel.feedbacks_count + 1)
+        )
+        await self.db.flush()
+        return result.rowcount > 0
 
     async def create_resolve_request(
         self,
